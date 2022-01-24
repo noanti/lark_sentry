@@ -50,16 +50,22 @@ class LarkSentryNotificationsPlugin(notify.NotificationPlugin):
     logger = logging.getLogger('sentry.plugins.lark_sentry')
 
     def is_configured(self, project, **kwargs):
-        return bool(self.get_option('webhook', project) and self.get_option('message_template', project))
+        return bool(self.get_option('webhook_url', project) and self.get_option('message_template', project))
 
     def get_config(self, project, **kwargs):
+        default_template = """{title}
+{transaction}
+{request[method] request[url]}
+{location}
+{metadata[filename]}:{metadata[function]}
+"""
         return [
             {
-                'name': 'webhook',
-                'label': 'Webhook',
+                'name': 'webhook_url',
+                'label': 'webhook_url',
                 'type': 'text',
                 'help': 'Read more: https://getfeishu.cn/hc/en-us/articles/360024984973-Use-Bots-in-group-chat',
-                'placeholder': 'https://open.feishu.cn/open-apis/bot/hook/xxx',
+                'placeholder': 'https://open.feishu.cn/open-apis/bot/v2/hook/xxxx',
                 'validators': [],
                 'required': True,
             },
@@ -67,33 +73,19 @@ class LarkSentryNotificationsPlugin(notify.NotificationPlugin):
                 'name': 'message_template',
                 'label': 'Message Template',
                 'type': 'textarea',
-                'help': 'Chinese is not allowed;Set in standard python\'s {}-format convention, available names are: '
+                'help': 'Set in standard python\'s {}-format convention, available names are: '
                         'Undefined tags will be shown as [not set], [hr] means underline, [btn:text] means a button,'
                         ' [br] means next line',
                 'validators': [],
                 'required': True,
-                'default': "{header}<br>**Project**:  {project_name}<br>**User**:  {user}"
-                           "<br>**Env**:  {environment}<br>**Ver**:  {release}"
-                           "<br>**Msg**:  {message}<br><btn:view details>{url}"
+                'default': default_template,
             },
         ]
 
     def build_message(self, group, event):
-        tags = defaultdict(lambda: '[not set]')
-        tags.update({k: v for k, v in event.tags})
-        tags = dict(tags)
-        names = {
-            'header': str(event.title or 'not set'),
-            'environment': '',
-            'user': str(tags.get('sentry:user') or 'not set'),
-            'release': str(tags.get('sentry:release' or 'not set')),
-            'message': str(event.message or 'not set'),
-            'project_name': str(group.project.name or 'not set'),
-            'url': group.get_absolute_url(),
-        }
-        names.update(tags)
         template = str(self.get_message_template(group.project))
-        full_text_list = template.split('<br>')
+        msg = template.format(**event)
+        lines = msg.split('\n')
 
         body = {
             "msg_type": "interactive",
@@ -104,20 +96,20 @@ class LarkSentryNotificationsPlugin(notify.NotificationPlugin):
             }
         }
         elements = []
-        if full_text_list:
+        if lines:
             body['card']['header'] = {"title": {"tag": "plain_text",
                                                 "content": str(full_text_list.pop(0)).format(**names)}}
-            for _div in full_text_list:
-                _div = str(_div)
-                if not _div.strip():
+            for line in lines:
+                line = str(line)
+                if not line.strip():
                     continue
-                if _div == '<hr>':
+                if line == '<hr>':
                     elements.append({
                         "tag": "hr"
                     })
-                elif _div.startswith('<btn:'):
-                    btn_arr = _div.split('>')
-                    url = btn_arr[-1].format(**names)
+                elif line.startswith('<btn:'):
+                    btn_arr = line.split('>')
+                    url = btn_arr[-1]
                     btn_text = btn_arr[0].split(':')[-1]
                     elements.append({
                         "tag": "action",
@@ -138,7 +130,7 @@ class LarkSentryNotificationsPlugin(notify.NotificationPlugin):
                         "tag": "div",
                         "text": {
                             "tag": "lark_md",
-                            "content": str(_div).format(**names),
+                            "content": str(line)
                         }
                     })
         body['card']['elements'] = elements
